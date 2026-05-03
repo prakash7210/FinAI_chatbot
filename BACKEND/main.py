@@ -1,11 +1,9 @@
-from fastapi import FastAPI
-from app.api.routes import router
-from app.api.config import APP_NAME
+from Src.api.routes import router
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 app = FastAPI(
-    title=APP_NAME,
+    title="Financial AI Analyst API",
     version="1.0.0"
 )
 

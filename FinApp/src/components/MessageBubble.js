@@ -1,6 +1,4 @@
 /* eslint-disable prettier/prettier */
-/* eslint-disable curly */
-/* eslint-disable react/react-in-jsx-scope */
 /* eslint-disable react-native/no-inline-styles */
 import {
   View,
@@ -10,27 +8,95 @@ import {
   TextInput,
   Animated,
 } from 'react-native';
-import Markdown from 'react-native-markdown-display';
 import {COLORS} from '../theme/theme';
 import {useState, useEffect, useRef} from 'react';
 import Icon from 'react-native-vector-icons/FontAwesome5';
+import Clipboard from '@react-native-clipboard/clipboard';
 import API from '../api/client';
+import Tts from 'react-native-tts';
 
 export default function MessageBubble({message, onEdit}) {
   const isUser = message?.isUser;
 
-  const [editing, setEditing] = useState(false);
-  const [editText, setEditText] = useState(message?.text || '');
-  const [showActions, setShowActions] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   const [feedbackGiven, setFeedbackGiven] = useState(
     message?.feedbackGiven || false,
   );
   const [selected, setSelected] = useState(null);
 
-  // 🔥 Animation
+  const [speaking, setSpeaking] = useState(false);
+  const [ttsReady, setTtsReady] = useState(false);
+  const [highlightIndex, setHighlightIndex] = useState(-1);
+
+  const words = (message?.text || '').split(' ');
   const scale = useRef(new Animated.Value(1)).current;
 
+  // 🔥 COPY
+  const copyText = () => {
+    Clipboard.setString(message?.text || '');
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+
+  // 🔥 TTS INIT
+  useEffect(() => {
+    let finishSub;
+    let cancelSub;
+    let progressSub;
+
+    Tts.getInitStatus().then(() => {
+      setTtsReady(true);
+      Tts.setDefaultRate(0.45);
+    });
+
+    progressSub = Tts.addEventListener('tts-progress', event => {
+      const {start} = event;
+
+      let charCount = 0;
+      for (let i = 0; i < words.length; i++) {
+        charCount += words[i].length + 1;
+
+        if (start <= charCount) {
+          setHighlightIndex(i);
+          break;
+        }
+      }
+    });
+
+    finishSub = Tts.addEventListener('tts-finish', () => {
+      setSpeaking(false);
+      setHighlightIndex(-1);
+    });
+
+    cancelSub = Tts.addEventListener('tts-cancel', () => {
+      setSpeaking(false);
+      setHighlightIndex(-1);
+    });
+
+    return () => {
+      finishSub?.remove();
+      cancelSub?.remove();
+      progressSub?.remove();
+    };
+  }, []);
+
+  const speak = text => {
+    if (!text || !ttsReady) return;
+
+    Tts.stop();
+    setSpeaking(true);
+    setHighlightIndex(0);
+    Tts.speak(text);
+  };
+
+  const stopSpeak = () => {
+    Tts.stop();
+    setSpeaking(false);
+    setHighlightIndex(-1);
+  };
+
+  // 👍 👎 animation
   const animate = () => {
     Animated.sequence([
       Animated.timing(scale, {
@@ -46,7 +112,7 @@ export default function MessageBubble({message, onEdit}) {
     ]).start();
   };
 
-  // 🔥 FEEDBACK HANDLER
+  // 🔥 FEEDBACK API
   const handleFeedback = async rating => {
     if (feedbackGiven) return;
 
@@ -61,113 +127,94 @@ export default function MessageBubble({message, onEdit}) {
         source: message?.source || 'llm_generated',
       });
 
-      setFeedbackGiven(true); // 🔥 disable after click
+      setFeedbackGiven(true);
     } catch (err) {
-      console.log('FEEDBACK ERROR:', err);
+      console.log(err);
     }
   };
 
-  useEffect(() => {
-    if (showActions && !editing) {
-      const timer = setTimeout(() => setShowActions(false), 3000);
-      return () => clearTimeout(timer);
-    }
-  }, [showActions, editing]);
-
   return (
-    <TouchableOpacity
-      activeOpacity={0.9}
-      delayLongPress={300}
-      onLongPress={() => setShowActions(true)}>
-      <View
-        style={[
-          styles.container,
-          {
-            alignSelf: isUser ? 'flex-end' : 'flex-start',
-            backgroundColor: isUser ? '#14532D' : COLORS.card,
-          },
-        ]}>
-        {/* MESSAGE */}
-        {editing ? (
-          <TextInput
-            value={editText}
-            onChangeText={setEditText}
-            autoFocus
-            multiline
-            style={styles.input}
-          />
-        ) : (
-          <Markdown style={{body: {color: '#fff', fontSize: 15}}}>
-            {String(message?.text ?? '')}
-          </Markdown>
-        )}
+    <View
+      style={[
+        styles.container,
+        {
+          alignSelf: isUser ? 'flex-end' : 'flex-start',
+          backgroundColor: isUser ? '#14532D' : COLORS.card,
+        },
+      ]}>
+      {/* TEXT */}
+      <Text style={{flexWrap: 'wrap', lineHeight: 22}}>
+        {words.map((word, index) => {
+          let color = '#aaa';
 
-        {/* ✏️ EDIT (USER ONLY) */}
-        {isUser && showActions && (
-          <View style={styles.actions}>
-            {editing ? (
-              <>
-                <TouchableOpacity
-                  onPress={() => {
-                    onEdit(editText);
-                    setEditing(false);
-                    setShowActions(false);
-                  }}>
-                  <Text style={styles.save}>Save</Text>
-                </TouchableOpacity>
+          if (speaking) {
+            if (index === highlightIndex) color = '#22c55e';
+            else if (index < highlightIndex) color = '#fff';
+          } else {
+            color = '#fff';
+          }
 
-                <TouchableOpacity
-                  onPress={() => {
-                    setEditing(false);
-                    setShowActions(false);
-                  }}>
-                  <Text style={[styles.cancel, {paddingLeft: 12}]}>Cancel</Text>
-                </TouchableOpacity>
-              </>
-            ) : (
-              <TouchableOpacity onPress={() => setEditing(true)}>
-                <Text style={styles.edit}>
-                  <Icon name="edit" size={16} /> edit
-                </Text>
-              </TouchableOpacity>
-            )}
-          </View>
-        )}
+          return (
+            <Text key={index} style={{color, fontSize: 15}}>
+              {word + ' '}
+            </Text>
+          );
+        })}
+      </Text>
 
-        {/* 🔥 FEEDBACK (ICON ONLY) */}
-        {!isUser && (
-          <View style={styles.actionRow}>
-            {/* 👍 */}
-            <Animated.View style={{transform: [{scale}]}}>
-              <TouchableOpacity
-                onPress={() => handleFeedback(1)}
-                disabled={feedbackGiven}>
-                <Icon
-                  name="thumbs-up"
-                  size={18}
-                  color={selected === 1 ? '#22c55e' : '#888'}
-                  solid
-                />
-              </TouchableOpacity>
-            </Animated.View>
+      {/* 🔥 ACTION ROW */}
+      {!isUser && (
+        <View style={styles.actionRow}>
+          {/* 🔊 SPEAKER */}
+          {!speaking ? (
+            <TouchableOpacity onPress={() => speak(message.text)}>
+              <Icon name="volume-up" size={16} color="#aaa" />
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity onPress={stopSpeak}>
+              <Icon name="times" size={16} color="rgb(220, 28, 8)" />
+            </TouchableOpacity>
+          )}
 
-            {/* 👎 */}
-            <Animated.View style={{transform: [{scale}]}}>
-              <TouchableOpacity
-                onPress={() => handleFeedback(-1)}
-                disabled={feedbackGiven}>
-                <Icon
-                  name="thumbs-down"
-                  size={18}
-                  color={selected === -1 ? '#22c55e' : '#888'}
-                  solid
-                />
-              </TouchableOpacity>
-            </Animated.View>
-          </View>
-        )}
-      </View>
-    </TouchableOpacity>
+          {/* 📋 COPY */}
+          <TouchableOpacity onPress={copyText} style={{marginLeft: 3}}>
+            <Icon
+              name={copied ? 'check' : 'copy'}
+              size={16}
+              color={copied ? '#22c55e' : '#aaa'}
+            />
+          </TouchableOpacity>
+
+          {/* 👍 */}
+          <Animated.View style={{transform: [{scale}], marginLeft: 10}}>
+            <TouchableOpacity
+              onPress={() => handleFeedback(1)}
+              disabled={feedbackGiven}>
+              <Icon
+                name="thumbs-up"
+                size={16}
+                color={selected === 1 ? '#22c55e' : '#888'}
+                solid
+              />
+            </TouchableOpacity>
+          </Animated.View>
+
+          {/* 👎 */}
+          <Animated.View style={{transform: [{scale}], marginLeft: 5}}>
+            <TouchableOpacity
+              onPress={() => handleFeedback(-1)}
+              disabled={feedbackGiven}>
+              <Icon
+                name="thumbs-down"
+                size={16}
+                color={selected === -1 ? '#22c55e' : '#888'}
+                solid
+              />
+            </TouchableOpacity>
+          </Animated.View>
+        </View>
+      )}
+    </View>
   );
 }
 
@@ -178,25 +225,10 @@ const styles = StyleSheet.create({
     marginVertical: 6,
     borderRadius: 12,
   },
-  input: {
-    color: '#fff',
-    backgroundColor: '#000',
-    padding: 10,
-    borderRadius: 8,
-  },
-  actions: {
-    flexDirection: 'row',
-    marginTop: 6,
-  },
-
   actionRow: {
     flexDirection: 'row',
     marginTop: 8,
-    gap: 16,
-    opacity: 0.8,
+    gap: 14,
+    alignItems: 'center',
   },
-
-  edit: {color: 'white', fontWeight: 'bold'},
-  save: {color: 'white', fontWeight: 'bold',paddingRight: 12},
-  cancel: {color: 'red'},
 });

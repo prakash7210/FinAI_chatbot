@@ -10,7 +10,6 @@ db = client["financial_ai_db"]
 # Collections (like tables)
 queries_collection = db["queries"]
 feedback_collection = db["feedback"]
-logs_collection = db["logs"]
 documents_collection = db["documents"]
 chats_collection = db["chats"]
 messages_collection = db["messages"]

@@ -19,6 +19,7 @@ export default function ChatScreen() {
     messages,
     chats,
     sendMessage,
+    addMessage,
     loadMessages,
     createNewChat,
     editMessage,
@@ -85,7 +86,16 @@ export default function ChatScreen() {
           <TouchableOpacity onPress={() => setSidebarOpen(!sidebarOpen)}>
             <Text style={{color: COLORS.accent, fontSize: 18}}>☰</Text>
           </TouchableOpacity>
-          <Text style={{flex: 1, textAlign: 'center', fontSize: 20, fontWeight: 'bold', color: COLORS.accent}}>FinAI</Text>
+          <Text
+            style={{
+              flex: 1,
+              textAlign: 'center',
+              fontSize: 20,
+              fontWeight: 'bold',
+              color: COLORS.accent,
+            }}>
+            FinAI
+          </Text>
         </View>
 
         {/* MESSAGES */}
@@ -111,7 +121,7 @@ export default function ChatScreen() {
           </Text>
         )}
 
-        <ChatInput onSend={sendMessage} />
+        <ChatInput onSend={sendMessage} addMessage={addMessage} />
       </View>
     </SafeAreaView>
   );

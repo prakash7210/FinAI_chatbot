@@ -1,4 +1,4 @@
-from app.model.llm import generate_answer
+from Src.model.llm import generate_answer
 
 
 def classify_intent(query: str) -> str:

@@ -37,7 +37,7 @@ def chunk_text(text, chunk_size=200):
 # -----------------------------
 def add_documents(text_list):
     global doc_ids
-
+    
     all_chunks = []
     new_doc_ids = []
 
@@ -77,7 +77,7 @@ def retrieve_docs(query, k=8, final_k=3):
 
     query_embedding = model.encode([query])
 
-    distances, indices = index.search(
+    _, indices = index.search(
         np.array(query_embedding).astype("float32"), k
     )
 

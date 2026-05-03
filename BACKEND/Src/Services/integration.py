@@ -1,15 +1,21 @@
 import time
-from app.model.llm import generate_answer
-from app.RAG.rag import retrieve_docs
-from app.Services.search_service import search_external
-from app.Services.cache_service import cache_get, cache_set
-from app.Services.intent_service import classify_intent
-from app.Services.rag_filter import is_relevant
-from app.Services.rlhf_service import apply_rlhf
-from app.Services.prompt_service import build_improved_prompt
-from app.Services.query_service import store_query
-from app.model.prompt import build_prompt
-from app.Services.mode_detector import detect_user_mode
+from Src.model.llm import generate_answer
+from Src.RAG.rag import retrieve_docs
+from Src.Services.search_service import search_external
+from Src.Services.cache_service import cache_get, cache_set
+from Src.Services.intent_service import classify_intent
+from Src.Services.rag_filter import is_relevant
+from Src.Services.rlhf_service import apply_rlhf
+from Src.Services.query_service import store_query
+from Src.Services.prompt_service import build_improved_prompt
+from Src.Services.mode_detector import detect_user_mode
+
+
+def generate_feedback_answer(query, context, mode):
+    improved_query = build_improved_prompt(query, mode)
+    return generate_answer(improved_query, context, mode)
+
+
 # -----------------------------
 # CONFIDENCE    
 # -----------------------------
@@ -53,10 +59,16 @@ def analyze(query: str):
             "latency": 0
         }
 
+    mode = detect_user_mode(query)
+    print(f"Mode: {mode}")
+
     # -----------------------------
     # STEP 1: INTENT DETECTION 🔥
     # -----------------------------
     intent = classify_intent(query)
+    if mode == "realtime":
+        intent = "realtime"
+
     print(f"Intent: {intent}")
 
     # -----------------------------
@@ -66,7 +78,7 @@ def analyze(query: str):
         print("🔍 Using Search API")
 
         context = search_external(query)
-        final = generate_answer(query, context)
+        final = generate_feedback_answer(query, context, mode)
 
         cache_set(query, final)
 
@@ -74,6 +86,7 @@ def analyze(query: str):
             "response": final,
             "source": "search",
             "confidence": 0.95,
+            "mode": mode,
             "latency": round(time.time() - start_time, 2)
         }
 
@@ -86,7 +99,7 @@ def analyze(query: str):
         if rag_context and is_relevant(query, rag_context):
             print("✅ Using RAG")
 
-            final = generate_answer(query, rag_context)
+            final = generate_feedback_answer(query, rag_context, mode)
 
             cache_set(query, final)
 
@@ -94,6 +107,7 @@ def analyze(query: str):
                 "response": final,
                 "source": "rag",
                 "confidence": 0.9,
+                "mode": mode,
                 "latency": round(time.time() - start_time, 2)
             }
 
@@ -102,7 +116,7 @@ def analyze(query: str):
     # -----------------------------
     print("🧠 Using LLM")
 
-    initial = generate_answer(query, "")
+    initial = generate_feedback_answer(query, "", mode)
     confidence = compute_confidence(initial)
 
     # fallback
@@ -110,7 +124,7 @@ def analyze(query: str):
         print("🔁 Low confidence → Search")
 
         context = search_external(query)
-        final = generate_answer(query, context)
+        final = generate_feedback_answer(query, context, mode)
 
         source = "search"
         confidence = 0.7
@@ -118,48 +132,26 @@ def analyze(query: str):
         final = initial
         source = "llm"
 
-    cache_set(query, final)
-
     # -----------------------------
     # APPLY RLHF SOURCE ADJUSTMENT
     # -----------------------------
+    original_source = source
     source = apply_rlhf(query, source)
 
 
     # -----------------------------
-    # RE-RUN BASED ON NEW SOURCE
+    # RE-RUN ONLY IF RLHF CHANGED SOURCE
     # -----------------------------
-    if source == "rag":
-        context = retrieve_docs(query)
-    elif source == "search":
-        context = search_external(query)
-    else:
-        context = ""
+    if source != original_source:
+        if source == "rag":
+            context = retrieve_docs(query)
+        elif source == "search":
+            context = search_external(query)
+        else:
+            context = ""
 
-     
-     # -----------------------------
-    # STEP: DETECT MODE 🔥
-    # -----------------------------
-    mode = detect_user_mode(query)
-    print(f"Detected Mode: {mode}")
-
-    # -----------------------------
-    # BUILD SMART PROMPT
-    # -----------------------------
-    prompt = build_prompt(query, context, mode)
-
-    # -----------------------------
-    # GENERATE RESPONSE
-    # -----------------------------
-    final = generate_answer(prompt, context)
-     
-    # -----------------------------
-    # RLHFIMPROVED PROMPT 🔥
-    # -----------------------------
-    improved_query = build_improved_prompt(query)
-
-    final = generate_answer(improved_query, context)
-    
+        final = generate_feedback_answer(query, context, mode)
+        confidence = compute_confidence(final)
 
 
     # -----------------------------
@@ -176,5 +168,6 @@ def analyze(query: str):
         "response": final,
         "source": source,
         "confidence": confidence,
+        "mode": mode,
         "latency": round(time.time() - start_time, 2)
     }

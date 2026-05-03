@@ -9,6 +9,7 @@ class QueryResponse(BaseModel):
     response: str
     source: str
     confidence: float
+    mode: str | None = None
     latency: float
 
 
@@ -17,3 +18,4 @@ class FeedbackRequest(BaseModel):
     answer: str
     rating: str
     source: str
+    mode: str | None = None

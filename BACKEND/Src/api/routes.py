@@ -1,19 +1,19 @@
-from fastapi.responses import StreamingResponse
-import asyncio
-from app.RAG.store import process_pdf
-from fastapi import APIRouter, HTTPException
-from app.api.schemas import QueryRequest, QueryResponse, FeedbackRequest
-from app.Services.integration import analyze
-from app.Services.feedback_service import store_feedback
-from app.api.logger import logger
+from fastapi import APIRouter, HTTPException, UploadFile, File
 from bson import ObjectId
-from DB.db import chats_collection,messages_collection
-from DB.utils import serialize_chat, serialize_message
-from fastapi import UploadFile, File
 import os
 
-router = APIRouter()
+from Src.api.schemas import FeedbackRequest, QueryRequest, QueryResponse
+from Src.Services.integration import analyze
+from Src.Services.feedback_service import store_feedback
+from Src.api.logger import logger
 
+from DB.db import chats_collection, messages_collection
+from DB.utils import serialize_chat, serialize_message
+
+# 🔥 RAG IMPORTS
+from Src.RAG.store import process_file, search
+
+router = APIRouter()
 
 # -----------------------------
 # HEALTH CHECK
@@ -24,21 +24,22 @@ def health():
 
 
 # -----------------------------
-# MAIN ANALYSIS ENDPOINT
+# MAIN ANALYSIS (CHAT + RAG)
 # -----------------------------
 @router.post("/analyze", response_model=QueryResponse)
 def analyze_query(request: QueryRequest):
     try:
         query = request.query
-        chat_id = getattr(request, "chatId", None)  # ✅ support optional chatId
+        chat_id = getattr(request, "chatId", None)
 
-        logger.info(f"Received query: {query} | chatId: {chat_id}")
+        logger.info(f"Query: {query} | chatId: {chat_id}")
 
         # ==============================
-        # 🔥 BUILD CONTEXT (MEMORY)
+        # 🔥 CONTEXT (MEMORY + RAG)
         # ==============================
         context = ""
 
+        # 🧠 CHAT MEMORY
         if chat_id:
             try:
                 msgs = list(
@@ -56,18 +57,23 @@ def analyze_query(request: QueryRequest):
                     context += f"{role}: {m['text']}\n"
 
             except Exception as db_error:
-                logger.error(f"Context fetch error: {str(db_error)}")
+                logger.error(f"Memory error: {str(db_error)}")
 
-        # ==============================
-        # 🔥 HANDLE NON-FINANCE / SMALL INPUT
-        # ==============================
-        if len(query.strip()) < 3:
-            return QueryResponse(
-                response="Hi 👋 Please ask a detailed question.",
-                source="system",
-                confidence=1.0,
-                latency=0
-            )
+        # 🔥 RAG CONTEXT
+        try:
+            # 🔥 RAG CONTEXT
+            rag_context = search(query)
+
+            # ✅ IMPORTANT FIX
+            if not rag_context or rag_context.strip() == "":
+                print("⚠️ No relevant RAG data")
+                rag_context = ""
+            else:
+                print("✅ Using RAG:", rag_context[:100])
+                context += f"\nRelevant File Data:\n{rag_context}\n"
+
+        except Exception as rag_error:
+            logger.error(f"RAG error: {str(rag_error)}")
 
         # ==============================
         # 🔥 FINAL PROMPT
@@ -75,97 +81,87 @@ def analyze_query(request: QueryRequest):
         final_query = f"""
 You are an intelligent AI assistant.
 
-Conversation so far:
+Use the information below to answer:
+
 {context}
 
-User: {query}
-
 Instructions:
-- Be natural and helpful
-- Use context if relevant
-- If greeting → respond normally
-- If finance → give analysis
+
+- Use file data ONLY if relevant to the question
+- If retrieved context is unrelated → ignore it
+- Answer using general knowledge if needed
+- If image question → describe based on reasoning
+
+User Question:
+{query}
 """
 
-        # ==============================
-        # 🔥 CALL YOUR AI PIPELINE
-        # ==============================
         result = analyze(final_query)
 
         return QueryResponse(
             response=result.get("response", ""),
             source=result.get("source", "ai"),
             confidence=result.get("confidence", 0.9),
-            latency=result.get("latency", 0)
+            mode=result.get("mode"),
+            latency=result.get("latency", 0),
         )
 
     except Exception as e:
         logger.error(f"Analyze Error: {str(e)}")
-
-        raise HTTPException(
-            status_code=500,
-            detail="Internal Server Error"
-        )
-    
-@router.post("/generate-title")
-def generate_title(data: dict):
-    query = data["query"]
-
-    # 🔥 simple version (can replace with AI later)
-    title = query[:25]
-
-    return {"title": title}
+        raise HTTPException(status_code=500, detail="Internal Server Error")
 
 
+# -----------------------------
+# FILE UPLOAD (ALL TYPES)
+# -----------------------------
 @router.post("/loadpdf")
-async def load_pdf(file: UploadFile = File(...)):
+async def load_file(file: UploadFile = File(...)):
     try:
-        # 🔥 ensure folder exists
         os.makedirs("data", exist_ok=True)
 
-        filename = file.filename or "upload.pdf"
+        filename = file.filename or "upload"
         file_path = os.path.join("data", filename)
 
-        print("Uploading file:", filename)
+        print("Uploading:", filename)
 
-        # 🔥 save file
         with open(file_path, "wb") as f:
-            content = await file.read()
-            f.write(content)
+            f.write(await file.read())
 
-        # 🔥 process file (safe)
-        try:
-            process_pdf(file_path)
-        except Exception as e:
-            print("PDF processing error:", e)
+        ext = filename.split(".")[-1].lower()
 
-        return {"message": "PDF loaded successfully"}
+        process_file(file_path, ext)
+
+        return {
+            "message": f"{ext.upper()} processed successfully",
+            "filename": filename
+        }
 
     except Exception as e:
         print("UPLOAD ERROR:", e)
         return {"error": str(e)}
 
-# 🔥 CREATE CHAT
+
+# -----------------------------
+# CHAT MANAGEMENT
+# -----------------------------
 @router.post("/chats")
 def create_chat(data: dict):
     result = chats_collection.insert_one({
-        "title": data["title"]
+        "title": data.get("title", "New Chat")
     })
 
     return {
         "id": str(result.inserted_id),
-        "title": data["title"]
+        "title": data.get("title", "New Chat")
     }
 
 
-# 🔥 GET ALL CHATS (SIDEBAR)
 @router.get("/chats")
 def get_chats():
     chats = chats_collection.find().sort("_id", -1)
     return [serialize_chat(c) for c in chats]
 
 
-# 🔥 SAVE MESSAGE
 @router.post("/messages")
 def save_message(data: dict):
     messages_collection.insert_one({
@@ -173,11 +169,9 @@ def save_message(data: dict):
         "text": data["text"],
         "isUser": data["isUser"]
     })
-
     return {"status": "saved"}
 
 
-# 🔥 GET CHAT MESSAGES
 @router.get("/chats/{chat_id}")
 def get_chat_messages(chat_id: str):
     msgs = messages_collection.find({
@@ -186,26 +180,26 @@ def get_chat_messages(chat_id: str):
 
     return {
         "messages": [serialize_message(m) for m in msgs]
-    } 
+    }
 
 
 # -----------------------------
-# FEEDBACK ENDPOINT (RLHF)
+# FEEDBACK (RLHF)
 # -----------------------------
 @router.post("/feedback")
-def feedback_api(data: dict):
-
+def feedback_api(data:FeedbackRequest):
     store_feedback(
-        query=data["query"],
-        answer=data["answer"],
-        rating=data["rating"],
-        source=data["source"],
+        query=data.query,
+        answer=data.answer,
+        rating=data.rating,
+        source=data.source,
+        mode=data.mode,
     )
-
     return {"message": "Feedback saved"}
 
+
 # -----------------------------
-# UPDATE MESSAGE (FOR EDITING)
+# UPDATE / DELETE
 # -----------------------------
 @router.put("/messages/{message_id}")
 def update_message(message_id: str, data: dict):
@@ -214,9 +208,8 @@ def update_message(message_id: str, data: dict):
         {"$set": {"text": data["text"]}}
     )
     return {"status": "updated"}
-# -----------------------------
-# DELETE MESSAGE
-# -----------------------------
+
+
 @router.delete("/messages/{message_id}")
 def delete_message(message_id: str):
     messages_collection.delete_one(
@@ -224,9 +217,6 @@ def delete_message(message_id: str):
     )
     return {"status": "deleted"}
 
-# -----------------------------
-# UPDATE CHAT
-# -----------------------------
 
 @router.put("/chats/{chat_id}")
 def update_chat(chat_id: str, data: dict):
@@ -235,9 +225,7 @@ def update_chat(chat_id: str, data: dict):
         {"$set": {"title": data["title"]}}
     )
     return {"status": "updated"}
-# -----------------------------
-# DELETE CHAT (AND ITS MESSAGES)     
-# -----------------------------
+
 
 @router.delete("/chats/{chat_id}")
 def delete_chat(chat_id: str):

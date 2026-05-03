@@ -1,14 +1,14 @@
-from app.model.config import GROQ_API_KEY
-from app.model.prompt import build_prompt
+from Src.model.config import GROQ_API_KEY
+from Src.model.prompt import build_prompt
 from groq import Groq
 # Create client
 client = Groq(api_key=GROQ_API_KEY)
 
-def generate_answer(query, context):
+def generate_answer(query, context="", mode="beginner"):
     try:
           # Determine user level based on query
         # Build prompt separately
-        prompt = build_prompt(query, context, "beginner")  # default to beginner, can be enhanced later
+        prompt = build_prompt(query, context, mode)
 
         # Call model
         response = client.chat.completions.create(

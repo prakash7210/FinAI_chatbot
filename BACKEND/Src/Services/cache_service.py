@@ -7,3 +7,7 @@ def cache_get(key):
 
 def cache_set(key, value):
     cache_store[key] = value
+
+
+def cache_delete(key):
+    cache_store.pop(key, None)

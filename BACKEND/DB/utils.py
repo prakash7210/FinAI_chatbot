@@ -1,5 +1,3 @@
-from bson import ObjectId
-
 def serialize_chat(chat):
     return {
         "id": str(chat["_id"]),

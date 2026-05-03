@@ -10,15 +10,23 @@ export default function useChat() {
 
   // 🔥 LOAD CHATS
   const loadChats = async () => {
-    const res = await API.get('/chats');
-    setChats(res.data);
+    try {
+      const res = await API.get('/chats');
+      setChats(res.data);
+    } catch (err) {
+      console.log('LOAD CHATS ERROR:', err?.message);
+    }
   };
 
   // 🔥 LOAD MESSAGES
   const loadMessages = async id => {
-    setChatId(id);
-    const res = await API.get(`/chats/${id}`);
-    setMessages(res.data.messages);
+    try {
+      setChatId(id);
+      const res = await API.get(`/chats/${id}`);
+      setMessages(res.data.messages || []);
+    } catch (err) {
+      console.log('LOAD MESSAGES ERROR:', err?.message);
+    }
   };
 
   // 🔥 NEW CHAT
@@ -27,7 +35,17 @@ export default function useChat() {
     setChatId(null);
   };
 
-  // 🔥 SMOOTH TYPING (UPDATED WITH QUERY + SOURCE)
+  // 🔥 SAFE RESPONSE HANDLER
+  const getAIResponse = data => {
+    return (
+      data?.answer ||
+      data?.response ||
+      data?.data?.answer ||
+      '⚠️ No response from server'
+    );
+  };
+
+  // 🔥 SMOOTH TYPING
   const typeMessage = (text, query, source = 'llm_generated') => {
     let index = 0;
     const chunkSize = 3;
@@ -66,24 +84,38 @@ export default function useChat() {
 
   // 🔥 SEND MESSAGE
   const sendMessage = async text => {
+    if (!text.trim()) return;
+
     let id = chatId;
 
+    // ✅ CREATE CHAT IF NOT EXISTS
     if (!id) {
-      const titleRes = await API.post('/generate-title', {query: text});
-      const chatRes = await API.post('/chats', {title: titleRes.data.title});
-      id = chatRes.data.id;
-      setChatId(id);
-      loadChats();
+      try {
+        const titleRes = await API.post('/generate-title', {query: text});
+        const chatRes = await API.post('/chats', {
+          title: titleRes.data?.title || text.slice(0, 20),
+        });
+
+        id = chatRes.data.id;
+        setChatId(id);
+        loadChats();
+      } catch (err) {
+        console.log('CREATE CHAT ERROR:', err?.message);
+      }
     }
 
-    const userMsg = {text, isUser: true};
-    setMessages(prev => [...prev, userMsg]);
+    // ✅ ADD USER MESSAGE
+    setMessages(prev => [...prev, {text, isUser: true}]);
 
-    await API.post('/messages', {
-      chatId: id,
-      text,
-      isUser: true,
-    });
+    try {
+      await API.post('/messages', {
+        chatId: id,
+        text,
+        isUser: true,
+      });
+    } catch (err) {
+      console.log('SAVE USER MSG ERROR:', err?.message);
+    }
 
     setLoading(true);
 
@@ -93,10 +125,11 @@ export default function useChat() {
         chatId: id,
       });
 
-      const responseText = res.data.response;
-      const source = res.data.source || 'llm_generated';
+      console.log('API RESPONSE:', res.data); // 🔥 DEBUG
 
-      // 🔥 typing animation WITH metadata
+      const responseText = getAIResponse(res.data);
+      const source = res.data?.source || 'llm_generated';
+
       setTimeout(() => {
         typeMessage(responseText, text, source);
       }, 200);
@@ -107,7 +140,15 @@ export default function useChat() {
         isUser: false,
       });
     } catch (err) {
-      console.log(err);
+      console.log('CHAT ERROR:', err?.response?.data || err.message);
+
+      setMessages(prev => [
+        ...prev,
+        {
+          text: '❌ Server error. Please try again.',
+          isUser: false,
+        },
+      ]);
     }
 
     setLoading(false);
@@ -134,8 +175,8 @@ export default function useChat() {
         query: newText,
       });
 
-      const responseText = res.data.response;
-      const source = res.data.source || 'llm_generated';
+      const responseText = getAIResponse(res.data);
+      const source = res.data?.source || 'llm_generated';
 
       setTimeout(() => {
         typeMessage(responseText, newText, source);
@@ -167,7 +208,7 @@ export default function useChat() {
   // 🔥 RENAME CHAT
   const renameChat = async (chatId, newTitle) => {
     try {
-      if (!newTitle || newTitle.trim() === '') return;
+      if (!newTitle?.trim()) return;
 
       await API.put(`/chats/${chatId}`, {
         title: newTitle,
@@ -185,6 +226,41 @@ export default function useChat() {
     }
   };
 
+  // 🔥 SEND VOICE (UPDATED SAFE)
+  const sendVoice = async filePath => {
+    try {
+      setLoading(true);
+
+      const formData = new FormData();
+
+      formData.append('file', {
+        uri: filePath,
+        name: 'voice.m4a',
+        type: 'audio/m4a',
+      });
+
+      const res = await API.post('/voice-chat', formData, {
+        headers: {'Content-Type': 'multipart/form-data'},
+      });
+
+      const aiReply = getAIResponse(res.data);
+      const textQuery = res.data?.query || '';
+
+      setMessages(prev => [
+        ...prev,
+        {text: textQuery, isUser: true},
+        {
+          text: aiReply,
+          isUser: false,
+          query: textQuery,
+        },
+      ]);
+    } catch (err) {
+      console.log('VOICE ERROR:', err?.response?.data || err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
   useEffect(() => {
     loadChats();
   }, []);
@@ -193,6 +269,7 @@ export default function useChat() {
     messages,
     chats,
     sendMessage,
+    sendVoice,
     loadMessages,
     createNewChat,
     editMessage,
